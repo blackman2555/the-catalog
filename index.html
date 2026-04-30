@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Teia Music Mosaic OBJKT</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --text: #e8eaf0;
+      --muted: #a4acc0;
+      --accent: #6aa4ff;
+      --playing: #70e1a1;
+      --danger: #ff7575;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .app {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .title { margin: 0; font-size: 1.2rem; }
+    .subtitle { margin: 4px 0 0; color: var(--muted); font-size: 0.92rem; }
+    .controls { display: flex; gap: 8px; align-items: center; }
+    button {
+      appearance: none;
+      border: 1px solid #2a3140;
+      background: #202637;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    .status {
+      min-height: 22px;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .status.error { color: var(--danger); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .tile {
+      border: 1px solid #2b3142;
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 8px;
+      cursor: pointer;
+      transition: border-color .15s ease, transform .15s ease;
+    }
+    .tile:hover, .tile:focus-visible {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      outline: none;
+    }
+    .tile.playing { border-color: var(--playing); }
+    .cover-wrap {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      background: #121621;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .cover {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .meta {
+      margin-top: 8px;
+      display: grid;
+      gap: 3px;
+    }
+    .name {
+      margin: 0;
+      font-size: 0.85rem;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .token {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .hint {
+      margin-top: 8px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div>
+        <h1 class="title">Teia Music Mosaic</h1>
+        <p class="subtitle">Tagged releases by one minter. Click any cover to play or pause.</p>
+      </div>
+      <div class="controls">
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+    </header>
+    <div id="status" class="status">Loading...</div>
+    <section id="grid" class="grid" aria-label="Album cover mosaic"></section>
+    <p class="hint">Tip: this interactive OBJKT refreshes to include new tagged mints from the configured wallet.</p>
+  </main>
+
+  <script>
+    const CONFIG = {
+      // Replace with your wallet before minting this interactive OBJKT.
+      minterWallet: "tz1REPLACE_WITH_YOUR_WALLET",
+      allowedTags: ["single", "album", "ep"],
+      graphqlEndpoint: "https://teztok.teia.rocks/v1/graphql",
+      ipfsGateway: "https://ipfs.io/ipfs/",
+      cacheTtlMs: 2 * 60 * 1000,
+      cacheKey: "teia-music-mosaic-cache-v1",
+      useMockData: true
+    };
+
+    const MOCK_ITEMS = [
+      {
+        tokenId: "mock-1",
+        name: "Mock Single A",
+        mintedAt: "2026-01-03T00:00:00Z",
+        tags: ["single"],
+        imageUrl: "https://picsum.photos/seed/teia-mock-a/800/800",
+        audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        mimeType: "audio/mpeg"
+      },
+      {
+        tokenId: "mock-2",
+        name: "Mock Album B",
+        mintedAt: "2026-01-02T00:00:00Z",
+        tags: ["album"],
+        imageUrl: "https://picsum.photos/seed/teia-mock-b/800/800",
+        audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+        mimeType: "audio/mpeg"
+      },
+      {
+        tokenId: "mock-3",
+        name: "Mock EP C",
+        mintedAt: "2026-01-01T00:00:00Z",
+        tags: ["ep"],
+        imageUrl: "https://picsum.photos/seed/teia-mock-c/800/800",
+        audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        mimeType: "audio/mpeg"
+      }
+    ];
+
+    const state = {
+      items: [],
+      currentTokenId: null,
+      currentAudio: null
+    };
+
+    const statusEl = document.getElementById("status");
+    const gridEl = document.getElementById("grid");
+    const refreshBtn = document.getElementById("refreshBtn");
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", isError);
+    }
+
+    function normalizeIpfs(uri) {
+      if (!uri || typeof uri !== "string") return "";
+      if (uri.startsWith("ipfs://")) return CONFIG.ipfsGateway + uri.slice("ipfs://".length);
+      return uri;
+    }
+
+    function sanitizeTags(tags) {
+      if (!Array.isArray(tags)) return [];
+      return tags
+        .map((entry) => String(entry && entry.tag ? entry.tag : "").trim().toLowerCase())
+        .filter(Boolean);
+    }
+
+    function hasAllowedTag(tags) {
+      const allowed = new Set(CONFIG.allowedTags.map((t) => t.toLowerCase()));
+      return tags.some((t) => allowed.has(t));
+    }
+
+    function hasAudioMime(token) {
+      return typeof token.mime_type === "string" && token.mime_type.toLowerCase().startsWith("audio/");
+    }
+
+    async function fetchFromTeztok() {
+      const query = `
+        query MusicTokens($wallet: String!) {
+          tokens(
+            where: {
+              artist_address: { _eq: $wallet }
+              minted_at: { _is_null: false }
+              artifact_uri: { _is_null: false }
+              display_uri: { _is_null: false }
+            }
+            order_by: { minted_at: desc }
+            limit: 200
+          ) {
+            token_id
+            name
+            minted_at
+            mime_type
+            artifact_uri
+            display_uri
+            thumbnail_uri
+            tags {
+              tag
+            }
+          }
+        }
+      `;
+
+      const response = await fetch(CONFIG.graphqlEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, variables: { wallet: CONFIG.minterWallet } })
+      });
+
+      if (!response.ok) {
+        throw new Error("Teztok request failed with status " + response.status);
+      }
+
+      const payload = await response.json();
+      if (payload.errors && payload.errors.length) {
+        throw new Error(payload.errors[0].message || "Teztok GraphQL error");
+      }
+
+      const rows = Array.isArray(payload.data && payload.data.tokens) ? payload.data.tokens : [];
+
+      return rows
+        .map((row) => {
+          const tags = sanitizeTags(row.tags);
+          const imageUri = row.display_uri || row.thumbnail_uri || "";
+          const audioUri = row.artifact_uri || "";
+          return {
+            tokenId: row.token_id,
+            name: row.name || "Untitled",
+            mintedAt: row.minted_at || "",
+            tags,
+            imageUrl: normalizeIpfs(imageUri),
+            audioUrl: normalizeIpfs(audioUri),
+            mimeType: row.mime_type || ""
+          };
+        })
+        .filter((item) => item.imageUrl && item.audioUrl)
+        .filter((item) => hasAllowedTag(item.tags))
+        .filter((item) => hasAudioMime({ mime_type: item.mimeType }))
+        .sort((a, b) => String(b.mintedAt).localeCompare(String(a.mintedAt)));
+    }
+
+    function loadCache() {
+      try {
+        const raw = localStorage.getItem(CONFIG.cacheKey);
+        if (!raw) return null;
+        const cached = JSON.parse(raw);
+        if (!cached || !Array.isArray(cached.items) || typeof cached.timestamp !== "number") return null;
+        if ((Date.now() - cached.timestamp) > CONFIG.cacheTtlMs) return null;
+        return cached.items;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function saveCache(items) {
+      try {
+        localStorage.setItem(CONFIG.cacheKey, JSON.stringify({ timestamp: Date.now(), items }));
+      } catch (_) {
+        // Ignore localStorage write failures.
+      }
+    }
+
+    function clearPlayback() {
+      if (state.currentAudio) {
+        state.currentAudio.pause();
+        state.currentAudio.currentTime = 0;
+      }
+      state.currentAudio = null;
+      state.currentTokenId = null;
+      document.querySelectorAll(".tile.playing").forEach((el) => el.classList.remove("playing"));
+    }
+
+    function togglePlay(item, tileEl) {
+      const isCurrent = state.currentTokenId === item.tokenId;
+      if (isCurrent && state.currentAudio) {
+        if (state.currentAudio.paused) {
+          state.currentAudio.play().catch(() => setStatus("Playback was blocked by the browser.", true));
+          tileEl.classList.add("playing");
+          return;
+        }
+        state.currentAudio.pause();
+        tileEl.classList.remove("playing");
+        return;
+      }
+
+      clearPlayback();
+
+      const audio = new Audio(item.audioUrl);
+      audio.preload = "none";
+      audio.addEventListener("ended", () => {
+        tileEl.classList.remove("playing");
+        state.currentTokenId = null;
+        state.currentAudio = null;
+      });
+      audio.addEventListener("error", () => {
+        setStatus("Failed to load audio for token #" + item.tokenId, true);
+        tileEl.classList.remove("playing");
+        state.currentTokenId = null;
+        state.currentAudio = null;
+      });
+
+      audio.play()
+        .then(() => {
+          state.currentAudio = audio;
+          state.currentTokenId = item.tokenId;
+          tileEl.classList.add("playing");
+          setStatus("Playing: " + item.name + " (#" + item.tokenId + ")");
+        })
+        .catch(() => {
+          setStatus("Playback was blocked by the browser.", true);
+          tileEl.classList.remove("playing");
+        });
+    }
+
+    function renderGrid(items) {
+      gridEl.innerHTML = "";
+
+      if (!items.length) {
+        setStatus("No tagged audio NFTs found for this wallet.");
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      for (const item of items) {
+        const tile = document.createElement("article");
+        tile.className = "tile";
+        tile.setAttribute("tabindex", "0");
+        tile.setAttribute("role", "button");
+        tile.setAttribute("aria-label", "Toggle playback for " + item.name);
+
+        const coverWrap = document.createElement("div");
+        coverWrap.className = "cover-wrap";
+        const cover = document.createElement("img");
+        cover.className = "cover";
+        cover.src = item.imageUrl;
+        cover.alt = item.name;
+        cover.loading = "lazy";
+        coverWrap.appendChild(cover);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const name = document.createElement("p");
+        name.className = "name";
+        name.textContent = item.name;
+        const token = document.createElement("p");
+        token.className = "token";
+        token.textContent = "OBJKT #" + item.tokenId;
+        meta.appendChild(name);
+        meta.appendChild(token);
+
+        tile.appendChild(coverWrap);
+        tile.appendChild(meta);
+
+        tile.addEventListener("click", () => togglePlay(item, tile));
+        tile.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            togglePlay(item, tile);
+          }
+        });
+        fragment.appendChild(tile);
+      }
+      gridEl.appendChild(fragment);
+      setStatus("Loaded " + items.length + " tagged music NFTs.");
+    }
+
+    async function loadAndRender(forceRefresh = false) {
+      if (CONFIG.useMockData) {
+        clearPlayback();
+        const mockItems = MOCK_ITEMS
+          .filter((item) => hasAllowedTag(item.tags))
+          .sort((a, b) => String(b.mintedAt).localeCompare(String(a.mintedAt)));
+        state.items = mockItems;
+        renderGrid(mockItems);
+        setStatus("Mock mode enabled: loaded " + mockItems.length + " local test items.");
+        return;
+      }
+
+      if (!CONFIG.minterWallet.startsWith("tz")) {
+        setStatus("Please set CONFIG.minterWallet before minting this OBJKT.", true);
+        return;
+      }
+
+      try {
+        clearPlayback();
+        if (!forceRefresh) {
+          const cached = loadCache();
+          if (cached && cached.length) {
+            state.items = cached;
+            renderGrid(state.items);
+            return;
+          }
+        }
+
+        setStatus("Fetching your tagged music NFTs...");
+        const items = await fetchFromTeztok();
+        state.items = items;
+        saveCache(items);
+        renderGrid(items);
+      } catch (error) {
+        const message = error && error.message ? error.message : "Unknown error";
+        setStatus("Could not load NFTs: " + message, true);
+      }
+    }
+
+    refreshBtn.addEventListener("click", () => {
+      loadAndRender(true);
+    });
+
+    loadAndRender(false);
+  </script>
+</body>
+</html>
