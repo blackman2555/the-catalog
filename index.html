@@ -136,6 +136,95 @@
       font-size: 0.76rem;
       color: var(--muted);
     }
+    .catalog-more {
+      margin-top: 28px;
+      width: min(100%, 840px);
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .catalog-more[hidden] {
+      display: none !important;
+    }
+    .catalog-more-title {
+      margin: 0 0 12px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .catalog-more-row {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+    }
+    .catalog-more-scroll {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding: 4px 2px 14px;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .catalog-more-scroll::-webkit-scrollbar {
+      display: none;
+    }
+    .catalog-more-nav {
+      flex-shrink: 0;
+      align-self: center;
+      width: 40px;
+      height: 40px;
+      margin: 0;
+      padding: 0;
+      border-radius: 10px;
+      font-size: 1.35rem;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text);
+      background: #202637;
+      border: 1px solid #2a3140;
+      transition: border-color 0.15s ease, opacity 0.15s ease;
+    }
+    .catalog-more-nav:hover:not(:disabled) {
+      border-color: var(--accent);
+    }
+    .catalog-more-nav:focus-visible {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .catalog-more-nav:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    .tile.tile--catalog {
+      position: relative;
+      flex: 0 0 auto;
+      width: clamp(118px, 29vw, 168px);
+      left: auto;
+      right: auto;
+      top: auto;
+      transform: none;
+      scroll-snap-align: start;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+    }
+    .tile.tile--catalog:hover,
+    .tile.tile--catalog:focus-visible {
+      transform: scale(1.02);
+    }
+    .tile.tile--catalog .meta {
+      margin-top: 6px;
+    }
+    .tile.tile--catalog .name {
+      font-size: 0.78rem;
+    }
+    .tile.tile--catalog .token {
+      font-size: 0.7rem;
+    }
     @media (max-width: 760px) {
       .collage {
         height: clamp(300px, 84vw, 420px);
@@ -190,7 +279,8 @@
       </div>
     </header>
     <div id="status" class="status">Loading...</div>
-    <section id="grid" class="collage" aria-label="Album cover mosaic collage"></section>
+    <section id="grid" class="collage" aria-label="Top tracks mosaic collage"></section>
+    <section id="catalogMore" class="catalog-more" aria-label="More tracks in catalog" hidden></section>
     <p class="hint">Tip: this interactive OBJKT refreshes to include new tagged mints from the configured wallet.</p>
   </main>
 
@@ -276,7 +366,30 @@
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
         mimeType: "audio/mpeg",
         salesCount: 11
-      }
+      },
+      // Simulated extra mints: 10 singles (ranking competes with originals for top 3 collage slots).
+      ...[
+        ["mock-4", "Mock Single D", "2026-01-14T00:00:00Z", 27, 4],
+        ["mock-5", "Mock Single E", "2026-01-13T00:00:00Z", 26, 5],
+        ["mock-6", "Mock Single F", "2026-01-12T00:00:00Z", 24, 6],
+        ["mock-7", "Mock Single G", "2026-01-11T00:00:00Z", 23, 7],
+        ["mock-8", "Mock Single H", "2026-01-10T00:00:00Z", 21, 8],
+        ["mock-9", "Mock Single I", "2026-01-09T00:00:00Z", 19, 9],
+        ["mock-10", "Mock Single J", "2026-01-08T00:00:00Z", 17, 10],
+        ["mock-11", "Mock Single K", "2026-01-07T00:00:00Z", 14, 11],
+        ["mock-12", "Mock Single L", "2026-01-06T00:00:00Z", 12, 12],
+        ["mock-13", "Mock Single M", "2026-01-05T00:00:00Z", 10, 13]
+      ].map(([tokenId, name, mintedAt, salesCount, songN]) => ({
+        tokenId,
+        name,
+        mintedAt,
+        tags: ["single"],
+        fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton",
+        imageUrl: "https://picsum.photos/seed/teia-" + tokenId + "/800/800",
+        audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-" + songN + ".mp3",
+        mimeType: "audio/mpeg",
+        salesCount
+      }))
     ];
 
     const state = {
@@ -290,6 +403,7 @@
 
     const statusEl = document.getElementById("status");
     const gridEl = document.getElementById("grid");
+    const catalogMoreEl = document.getElementById("catalogMore");
     const refreshBtn = document.getElementById("refreshBtn");
 
     function setStatus(message, isError = false) {
@@ -420,9 +534,8 @@
       if (invalidateCache) {
         state.ownershipCache.clear();
       }
-      const topItems = getTopItems(items);
       await Promise.all(
-        topItems.map(async (item) => {
+        items.map(async (item) => {
           const acc = await computePlaybackAccess(item);
           item.playLimitSeconds = acc.playLimitSeconds;
           item.ownsAnyEdition = acc.ownsAnyEdition;
@@ -713,7 +826,9 @@
     function activateTile(item) {
       state.focusedTokenId = item.tokenId;
       applyFocusRolesToDom();
-      const tileEl = gridEl.querySelector('[data-token-id="' + item.tokenId + '"]');
+      const tileEl =
+        gridEl.querySelector('[data-token-id="' + item.tokenId + '"]') ||
+        catalogMoreEl.querySelector('[data-token-id="' + item.tokenId + '"]');
       if (tileEl) {
         togglePlay(item, tileEl);
       }
@@ -721,6 +836,8 @@
 
     function renderGrid(items) {
       gridEl.innerHTML = "";
+      catalogMoreEl.innerHTML = "";
+      catalogMoreEl.hidden = true;
 
       if (!items.length) {
         setStatus("No tagged audio NFTs found for this wallet.");
@@ -728,6 +845,7 @@
       }
 
       const topItems = getTopItems(items);
+      const restItems = items.length > 3 ? items.slice(3) : [];
       state.topTokenIds = topItems.map((item) => item.tokenId);
       const roleMap = computeLayoutRoleMap(topItems);
       const fragment = document.createDocumentFragment();
@@ -781,7 +899,122 @@
         fragment.appendChild(tile);
       });
       gridEl.appendChild(fragment);
+
+      if (restItems.length) {
+        catalogMoreEl.hidden = false;
+        const title = document.createElement("h2");
+        title.className = "catalog-more-title";
+        title.textContent = "More in catalog (ranks 4–" + items.length + " by sales)";
+        const row = document.createElement("div");
+        row.className = "catalog-more-row";
+        const btnPrev = document.createElement("button");
+        btnPrev.type = "button";
+        btnPrev.className = "catalog-more-nav catalog-more-nav--prev";
+        btnPrev.setAttribute("aria-label", "Scroll catalog left");
+        btnPrev.appendChild(document.createTextNode("\u2039"));
+
+        const scroll = document.createElement("div");
+        scroll.className = "catalog-more-scroll";
+
+        const btnNext = document.createElement("button");
+        btnNext.type = "button";
+        btnNext.className = "catalog-more-nav catalog-more-nav--next";
+        btnNext.setAttribute("aria-label", "Scroll catalog right");
+        btnNext.appendChild(document.createTextNode("\u203A"));
+
+        restItems.forEach((item, idx) => {
+          const tile = document.createElement("article");
+          tile.className = "tile tile--catalog";
+          if (!item.ownsAnyEdition) {
+            tile.classList.add("tile--no-edition");
+          }
+          tile.dataset.tokenId = item.tokenId;
+          tile.setAttribute("tabindex", "0");
+          tile.setAttribute("role", "button");
+          tile.setAttribute(
+            "aria-label",
+            "Focus and toggle playback for " + item.name + " (rank " + (idx + 4) + ")"
+          );
+
+          const coverWrap = document.createElement("div");
+          coverWrap.className = "cover-wrap";
+          const cover = document.createElement("img");
+          cover.className = "cover";
+          cover.src = item.imageUrl;
+          cover.alt = item.name;
+          cover.loading = "lazy";
+          coverWrap.appendChild(cover);
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const name = document.createElement("p");
+          name.className = "name";
+          name.textContent = item.name;
+          const token = document.createElement("p");
+          token.className = "token";
+          const accessLabel = formatPlaybackAccess(item);
+          token.textContent =
+            "#" +
+            (idx + 4) +
+            " · " +
+            accessLabel +
+            " · #" +
+            item.tokenId +
+            " · Sales " +
+            item.salesCount;
+          meta.appendChild(name);
+          meta.appendChild(token);
+
+          tile.appendChild(coverWrap);
+          tile.appendChild(meta);
+
+          if (state.currentTokenId === item.tokenId && state.currentAudio && !state.currentAudio.paused) {
+            tile.classList.add("playing");
+          }
+
+          tile.addEventListener("click", () => activateTile(item));
+          tile.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              activateTile(item);
+            }
+          });
+          scroll.appendChild(tile);
+        });
+
+        const scrollStep = () => Math.max(180, Math.floor(scroll.clientWidth * 0.88));
+        const updateCatalogNav = () => {
+          const maxScroll = scroll.scrollWidth - scroll.clientWidth;
+          if (maxScroll <= 0) {
+            btnPrev.disabled = true;
+            btnNext.disabled = true;
+            return;
+          }
+          btnPrev.disabled = scroll.scrollLeft <= 1;
+          btnNext.disabled = scroll.scrollLeft >= maxScroll - 1;
+        };
+        btnPrev.addEventListener("click", () => {
+          scroll.scrollBy({ left: -scrollStep(), behavior: "smooth" });
+        });
+        btnNext.addEventListener("click", () => {
+          scroll.scrollBy({ left: scrollStep(), behavior: "smooth" });
+        });
+        scroll.addEventListener("scroll", updateCatalogNav, { passive: true });
+
+        row.appendChild(btnPrev);
+        row.appendChild(scroll);
+        row.appendChild(btnNext);
+        catalogMoreEl.appendChild(title);
+        catalogMoreEl.appendChild(row);
+        requestAnimationFrame(updateCatalogNav);
+        setTimeout(updateCatalogNav, 400);
+      }
+
       const fallbackNote = items.length < 3 ? " (showing all available)" : "";
+      const catalogNote =
+        items.length > topItems.length
+          ? " Scroll below the mosaic for ranks 4+."
+          : "";
       const viewer = String(CONFIG.viewerWallet || "").trim();
       let suffix = "";
       if (!viewer.startsWith("tz")) {
@@ -797,6 +1030,7 @@
           " most-bought tagged tracks by sales count" +
           fallbackNote +
           "." +
+          catalogNote +
           suffix
       );
     }
