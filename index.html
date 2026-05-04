@@ -108,6 +108,10 @@
       height: 100%;
       object-fit: cover;
       display: block;
+      transition: filter 0.25s ease;
+    }
+    .tile--no-edition .cover {
+      filter: grayscale(1);
     }
     .meta {
       margin-top: 8px;
@@ -195,9 +199,12 @@
       // Replace with your wallet before minting this interactive OBJKT.
       minterWallet: "tz1REPLACE_WITH_YOUR_WALLET",
       // Optional: viewer address to unlock full audio when they hold the FA2 token (TzKT mainnet check).
-      viewerWallet: "",
+      // Debug (mock): fake tz1 so mockEditionHoldings applies (not a real on-chain address).
+      viewerWallet: "tz1DebugViewerMockOnly",
       // Seconds of audio for visitors who do not hold an edition.
       previewSeconds: 10,
+      // Ramp volume down over this many seconds at the end of a capped preview (capped at ~40% of limit for short limits).
+      previewFadeOutSeconds: 1.2,
       // Used only when Teztok omits fa2_address on a row (uncommon).
       fa2ContractDefault: "",
       tzktApiBase: "https://api.tzkt.io/v1",
@@ -228,10 +235,11 @@
         ]
       },
       // Mock only: edition token ids the viewer owns per primary track (requires viewerWallet for mock checks).
+      // Debug: only Mock EP C (mock-3) — viewer holds one edition → color + 20s stitch (see editionStacks mock-3-ed2).
       mockEditionHoldings: {
-        "mock-1": ["mock-1"],
-        "mock-2": ["mock-2", "mock-2-ed2"],
-        "mock-3": ["mock-3", "mock-3-ed2", "mock-3-ed3"]
+        "mock-1": [],
+        "mock-2": [],
+        "mock-3": ["mock-3-ed2"]
       }
     };
 
@@ -352,14 +360,14 @@
       }
     }
 
-    async function computePlayLimitSeconds(item) {
+    async function computePlaybackAccess(item) {
       const basePreview = Number(CONFIG.previewSeconds) || 10;
       const primaryId = String(item.tokenId);
       const stacks = CONFIG.editionStacks && CONFIG.editionStacks[primaryId];
       const viewer = String(CONFIG.viewerWallet || "").trim();
 
       if (Array.isArray(stacks) && stacks.length > 0) {
-        const parts = await Promise.all(
+        const rows = await Promise.all(
           stacks.map(async (ed) => {
             const fa2Raw = ed.fa2Address || resolveFa2Address(item) || CONFIG.fa2ContractDefault;
             const fa2 = typeof fa2Raw === "string" && fa2Raw.startsWith("KT1") ? fa2Raw : "";
@@ -372,23 +380,32 @@
             } else if (viewer.startsWith("tz") && fa2) {
               owns = await viewerOwnsToken(viewer, fa2, ed.tokenId);
             }
-            return owns ? Number(ed.seconds) || 0 : 0;
+            return { owns, contrib: owns ? Number(ed.seconds) || 0 : 0 };
           })
         );
-        const sum = parts.reduce((a, b) => a + b, 0);
-        if (sum <= 0) return basePreview;
-        return sum;
+        const sum = rows.reduce((a, r) => a + r.contrib, 0);
+        const ownsAnyEdition = rows.some((r) => r.owns);
+        const playLimitSeconds = sum <= 0 ? basePreview : sum;
+        return { playLimitSeconds, ownsAnyEdition };
       }
 
-      if (!viewer.startsWith("tz")) return basePreview;
+      if (!viewer.startsWith("tz")) {
+        return { playLimitSeconds: basePreview, ownsAnyEdition: false };
+      }
       if (CONFIG.useMockData) {
         const collected = new Set((CONFIG.mockCollectedTokenIds || []).map(String));
-        return collected.has(primaryId) ? Infinity : basePreview;
+        const has = collected.has(primaryId);
+        return { playLimitSeconds: has ? Infinity : basePreview, ownsAnyEdition: has };
       }
       const fa2 = resolveFa2Address(item);
-      if (!fa2) return basePreview;
+      if (!fa2) {
+        return { playLimitSeconds: basePreview, ownsAnyEdition: false };
+      }
       const ownsPrimary = await viewerOwnsToken(viewer, fa2, item.tokenId);
-      return ownsPrimary ? Infinity : basePreview;
+      return {
+        playLimitSeconds: ownsPrimary ? Infinity : basePreview,
+        ownsAnyEdition: ownsPrimary
+      };
     }
 
     function formatPlaybackAccess(item) {
@@ -406,7 +423,9 @@
       const topItems = getTopItems(items);
       await Promise.all(
         topItems.map(async (item) => {
-          item.playLimitSeconds = await computePlayLimitSeconds(item);
+          const acc = await computePlaybackAccess(item);
+          item.playLimitSeconds = acc.playLimitSeconds;
+          item.ownsAnyEdition = acc.ownsAnyEdition;
         })
       );
     }
@@ -521,6 +540,7 @@
         if (audio._teiaOnError) {
           audio.removeEventListener("error", audio._teiaOnError);
         }
+        audio.volume = 1;
         audio.pause();
         audio.currentTime = 0;
       }
@@ -533,6 +553,7 @@
       const isCurrent = state.currentTokenId === item.tokenId;
       if (isCurrent && state.currentAudio) {
         if (state.currentAudio.paused) {
+          state.currentAudio.volume = 1;
           state.currentAudio.play().catch(() => setStatus("Playback was blocked by the browser.", true));
           tileEl.classList.add("playing");
           return;
@@ -550,6 +571,7 @@
 
       const audio = new Audio(item.audioUrl);
       audio.preload = "none";
+      audio.volume = 1;
 
       const onEnded = () => {
         if (audio._teiaOnPreviewTimeUpdate) {
@@ -591,11 +613,12 @@
             }
             cap = Math.min(limitSec, dur);
           }
-          if (audio.currentTime >= cap) {
+          const finishPreviewCut = () => {
             audio.removeEventListener("timeupdate", onPreviewTimeUpdate);
             if (audio._teiaOnLoadedMeta) {
               audio.removeEventListener("loadedmetadata", audio._teiaOnLoadedMeta);
             }
+            audio.volume = 0;
             audio.pause();
             audio.removeEventListener("ended", onEnded);
             audio.removeEventListener("error", onError);
@@ -607,6 +630,17 @@
                 ? "Preview ended — collect this OBJKT for full playback."
                 : "Playback limit reached — collect more editions to hear the rest.";
             setStatus(msg);
+          };
+          const fadeCfg = Number(CONFIG.previewFadeOutSeconds) || 0;
+          const fadeSec = fadeCfg > 0 ? Math.min(fadeCfg, cap * 0.4) : 0;
+          const fadeStart = fadeSec > 0 ? cap - fadeSec : cap;
+          if (audio.currentTime >= cap) {
+            finishPreviewCut();
+            return;
+          }
+          if (fadeSec > 0 && audio.currentTime >= fadeStart) {
+            const p = (audio.currentTime - fadeStart) / fadeSec;
+            audio.volume = Math.max(0, 1 - p);
           }
         };
         const onMeta = () => {
@@ -700,6 +734,9 @@
       topItems.forEach((item) => {
         const tile = document.createElement("article");
         tile.className = "tile " + (roleMap.get(item.tokenId) || "collage-center");
+        if (!item.ownsAnyEdition) {
+          tile.classList.add("tile--no-edition");
+        }
         tile.dataset.tokenId = item.tokenId;
         tile.setAttribute("tabindex", "0");
         tile.setAttribute("role", "button");
