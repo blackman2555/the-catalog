@@ -3,7 +3,8 @@
 Interactive OBJKT that:
 - fetches NFTs minted by one wallet from Teia's Teztok indexer
 - filters by tags `single`, `album`, `ep`
-- renders album art in a responsive mosaic
+- selects top 3 most-bought tracks by `sales_count`
+- renders album art in a responsive collage layout
 - plays/pauses the full MP3 when a cover is clicked
 
 ## Files
@@ -39,17 +40,28 @@ If you have no album covers minted yet:
    - include at least one allowed tag
    - have both image and audio URIs
    - have `mime_type` starting with `audio/`
-4. Sorts newest-first by `minted_at`.
-5. Renders a clickable album-cover mosaic.
-6. Enforces one active track at a time.
+4. Ranks by `sales_count` descending.
+5. Breaks ties by newest `minted_at`, then token id.
+6. Selects up to 3 tokens for the collage.
+7. Renders a clickable layered collage (left/center/right roles with overlap).
+8. Enforces one active track at a time.
 
 ## Collector Experience
 
-- Click cover: play selected NFT audio
+- Click/tap cover: move it to center and play selected NFT audio
 - Click same cover again: pause
-- Click another cover: previous track stops, new one plays
+- Click another cover: it becomes new center, previous track stops, and new one plays
 - Keyboard: focus tile and press Enter/Space
-- Refresh button: force re-fetch latest mints
+- Refresh button: force re-fetch and re-rank latest mints
+- Responsive collage keeps overlap/rotation across desktop, tablet, and mobile
+- Center selection is sticky until another cover is selected
+
+## Collage Ranking and Fallbacks
+
+- Primary ranking metric: `sales_count` (most bought first).
+- Secondary sort: newer mint date first.
+- Tertiary sort: higher token id first.
+- If fewer than 3 qualified items exist, collage renders available items without breaking layout.
 
 ## Teia Minting Checklist
 

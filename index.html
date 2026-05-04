@@ -55,25 +55,47 @@
       font-size: 0.9rem;
     }
     .status.error { color: var(--danger); }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 10px;
+    .collage {
+      position: relative;
+      width: min(100%, 840px);
+      margin: 0 auto;
+      height: clamp(260px, 56vw, 520px);
     }
     .tile {
+      position: absolute;
+      width: clamp(160px, 36vw, 340px);
       border: 1px solid #2b3142;
       background: var(--panel);
       border-radius: 12px;
       padding: 8px;
       cursor: pointer;
-      transition: border-color .15s ease, transform .15s ease;
+      transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+      box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
     }
     .tile:hover, .tile:focus-visible {
       border-color: var(--accent);
-      transform: translateY(-1px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.34);
       outline: none;
     }
     .tile.playing { border-color: var(--playing); }
+    .tile.collage-left {
+      left: clamp(2px, 2vw, 16px);
+      top: clamp(48px, 9vw, 98px);
+      transform: rotate(-7deg) scale(0.92);
+      z-index: 2;
+    }
+    .tile.collage-center {
+      left: 50%;
+      top: clamp(8px, 2.5vw, 22px);
+      transform: translateX(-50%) rotate(1deg) scale(1.04);
+      z-index: 4;
+    }
+    .tile.collage-right {
+      right: clamp(2px, 2vw, 16px);
+      top: clamp(54px, 10vw, 106px);
+      transform: rotate(8deg) scale(0.9);
+      z-index: 3;
+    }
     .cover-wrap {
       width: 100%;
       aspect-ratio: 1 / 1;
@@ -110,6 +132,46 @@
       font-size: 0.76rem;
       color: var(--muted);
     }
+    @media (max-width: 760px) {
+      .collage {
+        height: clamp(300px, 84vw, 420px);
+      }
+      .tile {
+        width: clamp(148px, 44vw, 260px);
+      }
+      .tile.collage-left {
+        left: 0;
+        top: clamp(80px, 21vw, 120px);
+        transform: rotate(-6deg) scale(0.9);
+      }
+      .tile.collage-center {
+        top: clamp(12px, 4vw, 22px);
+        transform: translateX(-50%) rotate(0deg) scale(1.02);
+      }
+      .tile.collage-right {
+        right: 0;
+        top: clamp(90px, 23vw, 130px);
+        transform: rotate(7deg) scale(0.88);
+      }
+    }
+    @media (max-width: 460px) {
+      .collage {
+        height: clamp(260px, 92vw, 360px);
+      }
+      .tile {
+        width: clamp(132px, 47vw, 230px);
+        padding: 6px;
+      }
+      .tile.collage-left {
+        top: clamp(98px, 24vw, 130px);
+      }
+      .tile.collage-right {
+        top: clamp(108px, 27vw, 142px);
+      }
+      .name {
+        font-size: 0.8rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -124,7 +186,7 @@
       </div>
     </header>
     <div id="status" class="status">Loading...</div>
-    <section id="grid" class="grid" aria-label="Album cover mosaic"></section>
+    <section id="grid" class="collage" aria-label="Album cover mosaic collage"></section>
     <p class="hint">Tip: this interactive OBJKT refreshes to include new tagged mints from the configured wallet.</p>
   </main>
 
@@ -148,7 +210,8 @@
         tags: ["single"],
         imageUrl: "https://picsum.photos/seed/teia-mock-a/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        mimeType: "audio/mpeg"
+        mimeType: "audio/mpeg",
+        salesCount: 17
       },
       {
         tokenId: "mock-2",
@@ -157,7 +220,8 @@
         tags: ["album"],
         imageUrl: "https://picsum.photos/seed/teia-mock-b/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-        mimeType: "audio/mpeg"
+        mimeType: "audio/mpeg",
+        salesCount: 25
       },
       {
         tokenId: "mock-3",
@@ -166,12 +230,15 @@
         tags: ["ep"],
         imageUrl: "https://picsum.photos/seed/teia-mock-c/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-        mimeType: "audio/mpeg"
+        mimeType: "audio/mpeg",
+        salesCount: 11
       }
     ];
 
     const state = {
       items: [],
+      topTokenIds: [],
+      focusedTokenId: null,
       currentTokenId: null,
       currentAudio: null
     };
@@ -223,6 +290,7 @@
             token_id
             name
             minted_at
+            sales_count
             mime_type
             artifact_uri
             display_uri
@@ -260,6 +328,7 @@
             tokenId: row.token_id,
             name: row.name || "Untitled",
             mintedAt: row.minted_at || "",
+            salesCount: Number(row.sales_count || 0),
             tags,
             imageUrl: normalizeIpfs(imageUri),
             audioUrl: normalizeIpfs(audioUri),
@@ -269,7 +338,12 @@
         .filter((item) => item.imageUrl && item.audioUrl)
         .filter((item) => hasAllowedTag(item.tags))
         .filter((item) => hasAudioMime({ mime_type: item.mimeType }))
-        .sort((a, b) => String(b.mintedAt).localeCompare(String(a.mintedAt)));
+        .sort((a, b) => {
+          if (b.salesCount !== a.salesCount) return b.salesCount - a.salesCount;
+          const mintedDiff = String(b.mintedAt).localeCompare(String(a.mintedAt));
+          if (mintedDiff !== 0) return mintedDiff;
+          return String(b.tokenId).localeCompare(String(a.tokenId));
+        });
     }
 
     function loadCache() {
@@ -345,6 +419,55 @@
         });
     }
 
+    function getTopItems(items) {
+      return items.slice(0, 3);
+    }
+
+    function getDefaultFocusedTokenId(topItems) {
+      if (!topItems.length) return null;
+      const centerIndex = Math.min(1, topItems.length - 1);
+      return topItems[centerIndex].tokenId;
+    }
+
+    function computeLayoutRoleMap(topItems) {
+      if (!topItems.length) return new Map();
+
+      const focusedExists = topItems.some((item) => item.tokenId === state.focusedTokenId);
+      const focusedTokenId = focusedExists ? state.focusedTokenId : getDefaultFocusedTokenId(topItems);
+      state.focusedTokenId = focusedTokenId;
+
+      const roleMap = new Map();
+      const centerItem = topItems.find((item) => item.tokenId === focusedTokenId);
+      if (centerItem) {
+        roleMap.set(centerItem.tokenId, "collage-center");
+      }
+
+      const remaining = topItems.filter((item) => item.tokenId !== focusedTokenId);
+      if (remaining[0]) roleMap.set(remaining[0].tokenId, "collage-left");
+      if (remaining[1]) roleMap.set(remaining[1].tokenId, "collage-right");
+      return roleMap;
+    }
+
+    function applyFocusRolesToDom() {
+      const topItems = getTopItems(state.items);
+      const roleMap = computeLayoutRoleMap(topItems);
+      const tiles = gridEl.querySelectorAll(".tile");
+      tiles.forEach((tile) => {
+        tile.classList.remove("collage-left", "collage-center", "collage-right");
+        const tokenId = tile.dataset.tokenId;
+        tile.classList.add(roleMap.get(tokenId) || "collage-center");
+      });
+    }
+
+    function activateTile(item) {
+      state.focusedTokenId = item.tokenId;
+      applyFocusRolesToDom();
+      const tileEl = gridEl.querySelector('[data-token-id="' + item.tokenId + '"]');
+      if (tileEl) {
+        togglePlay(item, tileEl);
+      }
+    }
+
     function renderGrid(items) {
       gridEl.innerHTML = "";
 
@@ -353,13 +476,17 @@
         return;
       }
 
+      const topItems = getTopItems(items);
+      state.topTokenIds = topItems.map((item) => item.tokenId);
+      const roleMap = computeLayoutRoleMap(topItems);
       const fragment = document.createDocumentFragment();
-      for (const item of items) {
+      topItems.forEach((item) => {
         const tile = document.createElement("article");
-        tile.className = "tile";
+        tile.className = "tile " + (roleMap.get(item.tokenId) || "collage-center");
+        tile.dataset.tokenId = item.tokenId;
         tile.setAttribute("tabindex", "0");
         tile.setAttribute("role", "button");
-        tile.setAttribute("aria-label", "Toggle playback for " + item.name);
+        tile.setAttribute("aria-label", "Focus and toggle playback for " + item.name);
 
         const coverWrap = document.createElement("div");
         coverWrap.className = "cover-wrap";
@@ -377,35 +504,44 @@
         name.textContent = item.name;
         const token = document.createElement("p");
         token.className = "token";
-        token.textContent = "OBJKT #" + item.tokenId;
+        token.textContent = "OBJKT #" + item.tokenId + " \u00b7 Sales " + item.salesCount;
         meta.appendChild(name);
         meta.appendChild(token);
 
         tile.appendChild(coverWrap);
         tile.appendChild(meta);
 
-        tile.addEventListener("click", () => togglePlay(item, tile));
+        if (state.currentTokenId === item.tokenId && state.currentAudio && !state.currentAudio.paused) {
+          tile.classList.add("playing");
+        }
+
+        tile.addEventListener("click", () => activateTile(item));
         tile.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            togglePlay(item, tile);
+            activateTile(item);
           }
         });
         fragment.appendChild(tile);
-      }
+      });
       gridEl.appendChild(fragment);
-      setStatus("Loaded " + items.length + " tagged music NFTs.");
+      const fallbackNote = items.length < 3 ? " (showing all available)" : "";
+      setStatus("Showing top " + topItems.length + " most-bought tagged tracks by sales count" + fallbackNote + ".");
     }
 
     async function loadAndRender(forceRefresh = false) {
       if (CONFIG.useMockData) {
         clearPlayback();
+        state.focusedTokenId = null;
         const mockItems = MOCK_ITEMS
           .filter((item) => hasAllowedTag(item.tags))
-          .sort((a, b) => String(b.mintedAt).localeCompare(String(a.mintedAt)));
+          .sort((a, b) => {
+            if (b.salesCount !== a.salesCount) return b.salesCount - a.salesCount;
+            return String(b.mintedAt).localeCompare(String(a.mintedAt));
+          });
         state.items = mockItems;
         renderGrid(mockItems);
-        setStatus("Mock mode enabled: loaded " + mockItems.length + " local test items.");
+        setStatus("Mock mode enabled: ranked by sales count.");
         return;
       }
 
@@ -416,6 +552,7 @@
 
       try {
         clearPlayback();
+        state.focusedTokenId = null;
         if (!forceRefresh) {
           const cached = loadCache();
           if (cached && cached.length) {
