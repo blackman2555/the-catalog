@@ -5,7 +5,7 @@ Interactive OBJKT that:
 - filters by tags `single`, `album`, `ep`
 - selects top 3 most-bought tracks by `sales_count`
 - renders album art in a responsive collage layout
-- plays/pauses the full MP3 when a cover is clicked
+- plays **previews** (`previewSeconds` default 10s), optional **stacked edition unlocks** (`editionStacks`: owning listed OBJKT editions adds seconds from the start of the same audio), or **legacy full unlock** when there is no stack and the viewer holds the primary token (TzKT)
 
 ## Files
 
@@ -15,7 +15,14 @@ Interactive OBJKT that:
 
 Open `index.html` and update `CONFIG`:
 
-- `minterWallet`: your Tezos wallet address (required)
+- `minterWallet`: your Tezos wallet address (required for live mode)
+- `viewerWallet`: optional; when set to a valid `tz1`… address, the app uses [TzKT](https://api.tzkt.io/) token balances. With **`editionStacks`** per primary `tokenId`, each owned edition row adds `seconds` of playback (summed, capped by file length). Without an `editionStacks` entry for a tile, **legacy** behavior applies: full playback if this wallet holds that tile's FA2 token, otherwise preview. If `viewerWallet` is empty, everyone gets preview-length playback only.
+- `previewSeconds`: preview length in seconds (default `10`)
+- `fa2ContractDefault`: optional fallback FA2 contract if a Teztok row omits `fa2_address`
+- `tzktApiBase`: default `https://api.tzkt.io/v1`
+- `mockCollectedTokenIds`: when `useMockData` is `true`, token ids that count as “collected” if `viewerWallet` is set (for testing unlock without chain calls)
+- `editionStacks`: map primary tile `tokenId` → array of `{ tokenId, fa2Address, seconds }` for extra OBJKT editions of the same song; owned rows **sum** into a playback budget from time 0
+- `mockEditionHoldings`: when `useMockData` is `true`, map primary `tokenId` → edition `tokenId`s the viewer mock-owns (requires `viewerWallet` set to a `tz1` address)
 - `allowedTags`: keep `["single", "album", "ep"]` or adjust
 - `graphqlEndpoint`: default `https://teztok.teia.rocks/v1/graphql`
 - `ipfsGateway`: default `https://ipfs.io/ipfs/`
@@ -45,10 +52,11 @@ If you have no album covers minted yet:
 6. Selects up to 3 tokens for the collage.
 7. Renders a clickable layered collage (left/center/right roles with overlap).
 8. Enforces one active track at a time.
+9. Resolves `fa2_address` per token from Teztok; if `viewerWallet` is set, queries TzKT and computes **`playLimitSeconds`** per visible tile (edition stack sum, legacy full unlock, or base preview).
 
 ## Collector Experience
 
-- Click/tap cover: move it to center and play selected NFT audio
+- Click/tap cover: move it to center and play selected NFT audio (preview or full, depending on holdings vs `viewerWallet`)
 - Click same cover again: pause
 - Click another cover: it becomes new center, previous track stops, and new one plays
 - Keyboard: focus tile and press Enter/Space

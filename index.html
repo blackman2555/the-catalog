@@ -194,12 +194,45 @@
     const CONFIG = {
       // Replace with your wallet before minting this interactive OBJKT.
       minterWallet: "tz1REPLACE_WITH_YOUR_WALLET",
+      // Optional: viewer address to unlock full audio when they hold the FA2 token (TzKT mainnet check).
+      viewerWallet: "",
+      // Seconds of audio for visitors who do not hold an edition.
+      previewSeconds: 10,
+      // Used only when Teztok omits fa2_address on a row (uncommon).
+      fa2ContractDefault: "",
+      tzktApiBase: "https://api.tzkt.io/v1",
       allowedTags: ["single", "album", "ep"],
       graphqlEndpoint: "https://teztok.teia.rocks/v1/graphql",
       ipfsGateway: "https://ipfs.io/ipfs/",
       cacheTtlMs: 2 * 60 * 1000,
-      cacheKey: "teia-music-mosaic-cache-v1",
-      useMockData: true
+      cacheKey: "teia-music-mosaic-cache-v2",
+      useMockData: true,
+      // When useMockData is true: tokenIds that count as collected if viewerWallet is set (for testing unlock).
+      mockCollectedTokenIds: [],
+      // Per primary tile tokenId: edition OBJKTs; owning a row adds `seconds` of playback from the start (stitched cap).
+      editionStacks: {
+        "mock-1": [
+          { tokenId: "mock-1", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 },
+          { tokenId: "mock-1-ed2", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 20 },
+          { tokenId: "mock-1-ed3", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 }
+        ],
+        "mock-2": [
+          { tokenId: "mock-2", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 },
+          { tokenId: "mock-2-ed2", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 20 },
+          { tokenId: "mock-2-ed3", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 }
+        ],
+        "mock-3": [
+          { tokenId: "mock-3", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 },
+          { tokenId: "mock-3-ed2", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 20 },
+          { tokenId: "mock-3-ed3", fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton", seconds: 10 }
+        ]
+      },
+      // Mock only: edition token ids the viewer owns per primary track (requires viewerWallet for mock checks).
+      mockEditionHoldings: {
+        "mock-1": ["mock-1"],
+        "mock-2": ["mock-2", "mock-2-ed2"],
+        "mock-3": ["mock-3", "mock-3-ed2", "mock-3-ed3"]
+      }
     };
 
     const MOCK_ITEMS = [
@@ -208,6 +241,7 @@
         name: "Mock Single A",
         mintedAt: "2026-01-03T00:00:00Z",
         tags: ["single"],
+        fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton",
         imageUrl: "https://picsum.photos/seed/teia-mock-a/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
         mimeType: "audio/mpeg",
@@ -218,6 +252,7 @@
         name: "Mock Album B",
         mintedAt: "2026-01-02T00:00:00Z",
         tags: ["album"],
+        fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton",
         imageUrl: "https://picsum.photos/seed/teia-mock-b/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
         mimeType: "audio/mpeg",
@@ -228,6 +263,7 @@
         name: "Mock EP C",
         mintedAt: "2026-01-01T00:00:00Z",
         tags: ["ep"],
+        fa2Address: "KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton",
         imageUrl: "https://picsum.photos/seed/teia-mock-c/800/800",
         audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
         mimeType: "audio/mpeg",
@@ -240,7 +276,8 @@
       topTokenIds: [],
       focusedTokenId: null,
       currentTokenId: null,
-      currentAudio: null
+      currentAudio: null,
+      ownershipCache: new Map()
     };
 
     const statusEl = document.getElementById("status");
@@ -274,6 +311,106 @@
       return typeof token.mime_type === "string" && token.mime_type.toLowerCase().startsWith("audio/");
     }
 
+    function resolveFa2Address(item) {
+      const raw = (item && item.fa2Address) || CONFIG.fa2ContractDefault;
+      return typeof raw === "string" && raw.startsWith("KT1") ? raw : "";
+    }
+
+    function ownershipCacheKey(fa2Address, tokenId) {
+      return fa2Address + "|" + String(tokenId);
+    }
+
+    async function viewerOwnsToken(viewer, fa2Address, tokenId) {
+      const fa2 = fa2Address;
+      const key = ownershipCacheKey(fa2, tokenId);
+      if (state.ownershipCache.has(key)) return state.ownershipCache.get(key);
+      if (!viewer || !viewer.startsWith("tz") || !fa2) {
+        state.ownershipCache.set(key, false);
+        return false;
+      }
+      const params = new URLSearchParams({
+        account: viewer,
+        "token.contract": fa2,
+        "token.tokenId": String(tokenId),
+        "balance.gt": "0",
+        limit: "1"
+      });
+      const url = CONFIG.tzktApiBase + "/tokens/balances?" + params.toString();
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          state.ownershipCache.set(key, false);
+          return false;
+        }
+        const rows = await response.json();
+        const owns = Array.isArray(rows) && rows.length > 0;
+        state.ownershipCache.set(key, owns);
+        return owns;
+      } catch (_) {
+        state.ownershipCache.set(key, false);
+        return false;
+      }
+    }
+
+    async function computePlayLimitSeconds(item) {
+      const basePreview = Number(CONFIG.previewSeconds) || 10;
+      const primaryId = String(item.tokenId);
+      const stacks = CONFIG.editionStacks && CONFIG.editionStacks[primaryId];
+      const viewer = String(CONFIG.viewerWallet || "").trim();
+
+      if (Array.isArray(stacks) && stacks.length > 0) {
+        const parts = await Promise.all(
+          stacks.map(async (ed) => {
+            const fa2Raw = ed.fa2Address || resolveFa2Address(item) || CONFIG.fa2ContractDefault;
+            const fa2 = typeof fa2Raw === "string" && fa2Raw.startsWith("KT1") ? fa2Raw : "";
+            let owns = false;
+            if (CONFIG.useMockData) {
+              if (viewer.startsWith("tz")) {
+                const held = (CONFIG.mockEditionHoldings && CONFIG.mockEditionHoldings[primaryId]) || [];
+                owns = held.map(String).includes(String(ed.tokenId));
+              }
+            } else if (viewer.startsWith("tz") && fa2) {
+              owns = await viewerOwnsToken(viewer, fa2, ed.tokenId);
+            }
+            return owns ? Number(ed.seconds) || 0 : 0;
+          })
+        );
+        const sum = parts.reduce((a, b) => a + b, 0);
+        if (sum <= 0) return basePreview;
+        return sum;
+      }
+
+      if (!viewer.startsWith("tz")) return basePreview;
+      if (CONFIG.useMockData) {
+        const collected = new Set((CONFIG.mockCollectedTokenIds || []).map(String));
+        return collected.has(primaryId) ? Infinity : basePreview;
+      }
+      const fa2 = resolveFa2Address(item);
+      if (!fa2) return basePreview;
+      const ownsPrimary = await viewerOwnsToken(viewer, fa2, item.tokenId);
+      return ownsPrimary ? Infinity : basePreview;
+    }
+
+    function formatPlaybackAccess(item) {
+      const lim = item.playLimitSeconds;
+      const base = Number(CONFIG.previewSeconds) || 10;
+      if (lim === Infinity) return "Full track";
+      if (lim <= base) return "Preview (" + Math.round(lim) + "s)";
+      return Math.round(lim) + "s stitch";
+    }
+
+    async function enrichOwnershipForTopItems(items, invalidateCache = false) {
+      if (invalidateCache) {
+        state.ownershipCache.clear();
+      }
+      const topItems = getTopItems(items);
+      await Promise.all(
+        topItems.map(async (item) => {
+          item.playLimitSeconds = await computePlayLimitSeconds(item);
+        })
+      );
+    }
+
     async function fetchFromTeztok() {
       const query = `
         query MusicTokens($wallet: String!) {
@@ -292,6 +429,7 @@
             minted_at
             sales_count
             mime_type
+            fa2_address
             artifact_uri
             display_uri
             thumbnail_uri
@@ -330,6 +468,7 @@
             mintedAt: row.minted_at || "",
             salesCount: Number(row.sales_count || 0),
             tags,
+            fa2Address: row.fa2_address || "",
             imageUrl: normalizeIpfs(imageUri),
             audioUrl: normalizeIpfs(audioUri),
             mimeType: row.mime_type || ""
@@ -368,9 +507,22 @@
     }
 
     function clearPlayback() {
-      if (state.currentAudio) {
-        state.currentAudio.pause();
-        state.currentAudio.currentTime = 0;
+      const audio = state.currentAudio;
+      if (audio) {
+        if (audio._teiaOnPreviewTimeUpdate) {
+          audio.removeEventListener("timeupdate", audio._teiaOnPreviewTimeUpdate);
+        }
+        if (audio._teiaOnLoadedMeta) {
+          audio.removeEventListener("loadedmetadata", audio._teiaOnLoadedMeta);
+        }
+        if (audio._teiaOnEnded) {
+          audio.removeEventListener("ended", audio._teiaOnEnded);
+        }
+        if (audio._teiaOnError) {
+          audio.removeEventListener("error", audio._teiaOnError);
+        }
+        audio.pause();
+        audio.currentTime = 0;
       }
       state.currentAudio = null;
       state.currentTokenId = null;
@@ -392,26 +544,91 @@
 
       clearPlayback();
 
+      const basePreview = Number(CONFIG.previewSeconds) || 10;
+      const limitSec = item.playLimitSeconds;
+      const fullPlayback = limitSec === Infinity;
+
       const audio = new Audio(item.audioUrl);
       audio.preload = "none";
-      audio.addEventListener("ended", () => {
+
+      const onEnded = () => {
+        if (audio._teiaOnPreviewTimeUpdate) {
+          audio.removeEventListener("timeupdate", audio._teiaOnPreviewTimeUpdate);
+        }
+        if (audio._teiaOnLoadedMeta) {
+          audio.removeEventListener("loadedmetadata", audio._teiaOnLoadedMeta);
+        }
         tileEl.classList.remove("playing");
         state.currentTokenId = null;
         state.currentAudio = null;
-      });
-      audio.addEventListener("error", () => {
+      };
+      audio._teiaOnEnded = onEnded;
+      audio.addEventListener("ended", onEnded);
+
+      const onError = () => {
+        if (audio._teiaOnPreviewTimeUpdate) {
+          audio.removeEventListener("timeupdate", audio._teiaOnPreviewTimeUpdate);
+        }
+        if (audio._teiaOnLoadedMeta) {
+          audio.removeEventListener("loadedmetadata", audio._teiaOnLoadedMeta);
+        }
         setStatus("Failed to load audio for token #" + item.tokenId, true);
         tileEl.classList.remove("playing");
         state.currentTokenId = null;
         state.currentAudio = null;
-      });
+      };
+      audio._teiaOnError = onError;
+      audio.addEventListener("error", onError);
+
+      if (!fullPlayback) {
+        const onPreviewTimeUpdate = () => {
+          if (state.currentAudio !== audio) return;
+          const dur = audio.duration;
+          let cap = limitSec;
+          if (isFinite(dur) && dur > 0) {
+            if (limitSec >= dur) {
+              return;
+            }
+            cap = Math.min(limitSec, dur);
+          }
+          if (audio.currentTime >= cap) {
+            audio.removeEventListener("timeupdate", onPreviewTimeUpdate);
+            if (audio._teiaOnLoadedMeta) {
+              audio.removeEventListener("loadedmetadata", audio._teiaOnLoadedMeta);
+            }
+            audio.pause();
+            audio.removeEventListener("ended", onEnded);
+            audio.removeEventListener("error", onError);
+            tileEl.classList.remove("playing");
+            state.currentTokenId = null;
+            state.currentAudio = null;
+            const msg =
+              limitSec <= basePreview
+                ? "Preview ended — collect this OBJKT for full playback."
+                : "Playback limit reached — collect more editions to hear the rest.";
+            setStatus(msg);
+          }
+        };
+        const onMeta = () => {
+          if (!isFinite(audio.duration) || audio.duration <= 0) return;
+          if (limitSec >= audio.duration) {
+            audio.removeEventListener("timeupdate", onPreviewTimeUpdate);
+            audio.removeEventListener("loadedmetadata", onMeta);
+          }
+        };
+        audio._teiaOnPreviewTimeUpdate = onPreviewTimeUpdate;
+        audio._teiaOnLoadedMeta = onMeta;
+        audio.addEventListener("loadedmetadata", onMeta);
+        audio.addEventListener("timeupdate", onPreviewTimeUpdate);
+      }
 
       audio.play()
         .then(() => {
           state.currentAudio = audio;
           state.currentTokenId = item.tokenId;
           tileEl.classList.add("playing");
-          setStatus("Playing: " + item.name + " (#" + item.tokenId + ")");
+          const modeLabel = formatPlaybackAccess(item);
+          setStatus(modeLabel + ": " + item.name + " (#" + item.tokenId + ")");
         })
         .catch(() => {
           setStatus("Playback was blocked by the browser.", true);
@@ -504,7 +721,9 @@
         name.textContent = item.name;
         const token = document.createElement("p");
         token.className = "token";
-        token.textContent = "OBJKT #" + item.tokenId + " \u00b7 Sales " + item.salesCount;
+        const accessLabel = formatPlaybackAccess(item);
+        token.textContent =
+          accessLabel + " \u00b7 #" + item.tokenId + " \u00b7 Sales " + item.salesCount;
         meta.appendChild(name);
         meta.appendChild(token);
 
@@ -526,7 +745,23 @@
       });
       gridEl.appendChild(fragment);
       const fallbackNote = items.length < 3 ? " (showing all available)" : "";
-      setStatus("Showing top " + topItems.length + " most-bought tagged tracks by sales count" + fallbackNote + ".");
+      const viewer = String(CONFIG.viewerWallet || "").trim();
+      let suffix = "";
+      if (!viewer.startsWith("tz")) {
+        suffix = " 10s previews until CONFIG.viewerWallet is set (holders unlock full audio).";
+      }
+      const mockHint = CONFIG.useMockData
+        ? "Mock mode — use viewerWallet + mockCollectedTokenIds to test unlock. "
+        : "";
+      setStatus(
+        mockHint +
+          "Showing top " +
+          topItems.length +
+          " most-bought tagged tracks by sales count" +
+          fallbackNote +
+          "." +
+          suffix
+      );
     }
 
     async function loadAndRender(forceRefresh = false) {
@@ -540,8 +775,8 @@
             return String(b.mintedAt).localeCompare(String(a.mintedAt));
           });
         state.items = mockItems;
+        await enrichOwnershipForTopItems(state.items, forceRefresh);
         renderGrid(mockItems);
-        setStatus("Mock mode enabled: ranked by sales count.");
         return;
       }
 
@@ -557,6 +792,7 @@
           const cached = loadCache();
           if (cached && cached.length) {
             state.items = cached;
+            await enrichOwnershipForTopItems(state.items, false);
             renderGrid(state.items);
             return;
           }
@@ -566,6 +802,7 @@
         const items = await fetchFromTeztok();
         state.items = items;
         saveCache(items);
+        await enrichOwnershipForTopItems(state.items, forceRefresh);
         renderGrid(items);
       } catch (error) {
         const message = error && error.message ? error.message : "Unknown error";
