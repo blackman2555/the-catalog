@@ -2,18 +2,27 @@
 
 Interactive OBJKT that:
 - fetches NFTs minted by one wallet from Teia's Teztok indexer
-- filters by tags `single`, `album`, `ep`
+- filters by configurable tags (default demo includes `music`, `nftmusic`, `musicnft`, plus `single` / `album` / `ep` for your own releases)
 - selects top 3 most-bought tracks by `sales_count`
 - renders album art in a responsive collage layout
 - plays **previews** (`previewSeconds` default 10s), optional **stacked edition unlocks** (`editionStacks`: owning listed OBJKT editions adds seconds from the start of the same audio), or **legacy full unlock** when there is no stack and the viewer holds the primary token (TzKT)
 
 ## Files
 
-- `index.html`: standalone OBJKT app (HTML/CSS/JS, no build step)
+- `index.html`: markup only; loads CSS and scripts
+- `css/styles.css`: layout and collage styles
+- `js/config.js`: `CONFIG` and `MOCK_ITEMS` (edit before minting / for mock mode)
+- `js/app.js`: Teztok fetch, playback, DOM collage (no build step; classic scripts)
+
+Serve the project over HTTP (for example `python3 -m http.server` in this folder) so relative paths resolve. For a **single-file** Teia interactive OBJKT, inline or concatenate these assets as required by your mint workflow.
+
+## Demo catalog (real OBJKTs)
+
+With `useMockData: false`, the default `minterWallet` points at **zimbabwe3000** (`tz1Rmjn3ga5CvXDSnPTV8k5M2QprJkBPRHBR`). Teztok returns dozens of audio OBJKTs (covers + artifact audio resolve via IPFS); ranking follows live `sales_count`. Example: [Black Moon on Teia](https://teia.art/objkt/743863). Swap `minterWallet` to your address when you mint your own pieces.
 
 ## Configure Before Minting
 
-Open `index.html` and update `CONFIG`:
+Open `js/config.js` and update `CONFIG`:
 
 - `minterWallet`: your Tezos wallet address (required for live mode)
 - `viewerWallet`: optional; when set to a valid `tz1`… address, the app uses [TzKT](https://api.tzkt.io/) token balances. With **`editionStacks`** per primary `tokenId`, each owned edition row adds `seconds` of playback (summed, capped by file length). Without an `editionStacks` entry for a tile, **legacy** behavior applies: full playback if this wallet holds that tile's FA2 token, otherwise preview. If `viewerWallet` is empty, everyone gets preview-length playback only.
@@ -23,7 +32,7 @@ Open `index.html` and update `CONFIG`:
 - `mockCollectedTokenIds`: when `useMockData` is `true`, token ids that count as “collected” if `viewerWallet` is set (for testing unlock without chain calls)
 - `editionStacks`: map primary tile `tokenId` → array of `{ tokenId, fa2Address, seconds }` for extra OBJKT editions of the same song; owned rows **sum** into a playback budget from time 0
 - `mockEditionHoldings`: when `useMockData` is `true`, map primary `tokenId` → edition `tokenId`s the viewer mock-owns (requires `viewerWallet` set to a `tz1` address)
-- `allowedTags`: keep `["single", "album", "ep"]` or adjust
+- `allowedTags`: intersect Teztok tags with this list (demo adds `music`, `nftmusic`, `musicnft`; tighten for your drop)
 - `graphqlEndpoint`: default `https://teztok.teia.rocks/v1/graphql`
 - `ipfsGateway`: default `https://ipfs.io/ipfs/`
 - `useMockData`: set `true` to test mosaic/player without minted NFTs
@@ -37,7 +46,7 @@ If you have no album covers minted yet:
 3. Test mosaic layout, click play/pause, keyboard controls, and refresh behavior.
 4. Set `CONFIG.useMockData = false` when ready for live Teztok data.
 
-`MOCK_ITEMS` in `index.html` contains sample cover/audio URLs and can be edited.
+With `useMockData: true`, populate `MOCK_ITEMS` in `js/config.js` for offline-only tests (otherwise leave it empty and use live Teztok).
 
 ## How It Works
 
@@ -76,7 +85,7 @@ If you have no album covers minted yet:
 1. Put your real wallet address in `CONFIG.minterWallet`.
 2. Test locally by opening `index.html` in browser.
 3. Confirm tagged NFTs (`single`, `album`, `ep`) appear.
-4. Upload/mint this HTML as an interactive OBJKT on Teia.
+4. Upload/mint packaged HTML/CSS/JS (or a single inlined HTML file, depending on platform) as an interactive OBJKT on Teia.
 5. Mint new tagged singles/albums/EPs from same wallet.
 6. Reload the interactive OBJKT to show new entries.
 
