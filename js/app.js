@@ -10,7 +10,7 @@ const state = {
 const statusEl = document.getElementById("status");
 const gridEl = document.getElementById("grid");
 const catalogMoreEl = document.getElementById("catalogMore");
-const refreshBtn = document.getElementById("refreshBtn");
+const creditsEl = document.getElementById("collectorCredits");
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -46,6 +46,236 @@ function resolveFa2Address(item) {
 
 function ownershipCacheKey(fa2Address, tokenId) {
   return fa2Address + "|" + String(tokenId);
+}
+
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) {
+    out.push(arr.slice(i, i + size));
+  }
+  return out;
+}
+
+function formatCheapestListingTz(mutez) {
+  if (mutez == null) return null;
+  const n = Number(mutez);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const xtz = n / 1e6;
+  if (!Number.isFinite(xtz)) return null;
+  const rounded = Math.round(xtz * 1000) / 1000;
+  const s = rounded.toFixed(3).replace(/\.?0+$/, "");
+  return s + " XTZ";
+}
+
+function teiaObjktUrl(item) {
+  const base = String(CONFIG.teiaObjktBase || "https://teia.art/objkt").replace(/\/$/, "");
+  return base + "/" + encodeURIComponent(String(item.tokenId));
+}
+
+async function fetchObjktListingsChunk(endpoint, fa2, tokenIds) {
+  const query = `
+    query ListingsForTokens($fa: String!, $ids: [String!]!) {
+      listing(where: {
+        fa_contract: {_eq: $fa},
+        token: {token_id: {_in: $ids}},
+        status: {_eq: "active"}
+      }) {
+        price_xtz
+        token { token_id }
+        currency { symbol }
+      }
+    }
+  `;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query, variables: { fa: fa2, ids: tokenIds } })
+  });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  if (payload.errors && payload.errors.length) return [];
+  const listing = payload.data && payload.data.listing;
+  return Array.isArray(listing) ? listing : [];
+}
+
+async function attachCheapestListings(items) {
+  for (const item of items) {
+    delete item.cheapestListingMutez;
+  }
+  const endpoint = CONFIG.objktGraphqlEndpoint || "https://data.objkt.com/v3/graphql";
+  const chunkSize = Math.max(20, Math.min(120, Number(CONFIG.objktListingChunkSize) || 90));
+  const byFa = new Map();
+
+  for (const item of items) {
+    const fa = resolveFa2Address(item);
+    if (!fa) continue;
+    const tid = String(item.tokenId);
+    if (!byFa.has(fa)) byFa.set(fa, new Set());
+    byFa.get(fa).add(tid);
+  }
+
+  const priceByKey = new Map();
+
+  try {
+    for (const [fa, idSet] of byFa) {
+      const unique = Array.from(idSet);
+      const chunks = chunkArray(unique, chunkSize);
+      for (const ids of chunks) {
+        const rows = await fetchObjktListingsChunk(endpoint, fa, ids);
+        for (const row of rows) {
+          const sym = row.currency && row.currency.symbol ? String(row.currency.symbol) : "";
+          if (sym !== "XTZ") continue;
+          const tid = row.token && row.token.token_id != null ? String(row.token.token_id) : "";
+          const p = row.price_xtz;
+          if (!tid || p == null) continue;
+          const key = ownershipCacheKey(fa, tid);
+          const prev = priceByKey.get(key);
+          const num = Number(p);
+          if (!Number.isFinite(num)) continue;
+          if (prev == null || num < prev) priceByKey.set(key, num);
+        }
+      }
+    }
+  } catch (_) {
+    // OBJKT marketplace optional — tiles still render without price chips.
+  }
+
+  for (const item of items) {
+    const fa = resolveFa2Address(item);
+    if (!fa) {
+      item.cheapestListingMutez = null;
+      continue;
+    }
+    const key = ownershipCacheKey(fa, item.tokenId);
+    item.cheapestListingMutez = priceByKey.has(key) ? priceByKey.get(key) : null;
+  }
+}
+
+function appendListingChip(coverWrap, item) {
+  const a = document.createElement("a");
+  a.className = "cover-listing";
+  const formatted = formatCheapestListingTz(item.cheapestListingMutez);
+  if (formatted) {
+    a.textContent = formatted;
+    a.setAttribute("aria-label", "Cheapest listing " + formatted + ", open on Teia");
+  } else {
+    a.classList.add("cover-listing--no-price");
+    a.textContent = "\u2014";
+    a.setAttribute("aria-label", "No active listing — view OBJKT on Teia");
+  }
+  a.href = teiaObjktUrl(item);
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.addEventListener("click", (e) => e.stopPropagation());
+  coverWrap.appendChild(a);
+}
+
+function formatShortAddress(addr) {
+  if (!addr || addr.length < 12) return addr || "?";
+  return addr.slice(0, 5) + "…" + addr.slice(-4);
+}
+
+function clearCollectorCreditsLayer() {
+  if (!creditsEl) return;
+  creditsEl.innerHTML = "";
+  creditsEl.hidden = true;
+}
+
+function populateCollectorCreditsDom(labels) {
+  if (!creditsEl) return;
+  const minL = Math.max(8, Number(CONFIG.collectorCreditsMinLines) || 28);
+  const maxL = Math.max(minL, Number(CONFIG.collectorCreditsMaxLines) || 72);
+  const lines = labels.slice();
+  for (let i = lines.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = lines[i];
+    lines[i] = lines[j];
+    lines[j] = t;
+  }
+  const target = Math.min(maxL, Math.max(minL, Math.round(labels.length * 2.2)));
+  const out = [];
+  let k = 0;
+  while (out.length < target && lines.length) {
+    out.push(lines[k % lines.length]);
+    k++;
+  }
+  const frag = document.createDocumentFragment();
+  for (const text of out) {
+    const span = document.createElement("span");
+    span.className = "collector-credits__line";
+    span.textContent = text;
+    const leftPct = 4 + Math.random() * 88;
+    const durSec = 68 + Math.random() * 72;
+    const delaySec = -(Math.random() * durSec);
+    span.style.setProperty("--cc-left", leftPct + "%");
+    span.style.setProperty("--cc-dur", durSec.toFixed(2) + "s");
+    span.style.setProperty("--cc-delay", delaySec.toFixed(2) + "s");
+    frag.appendChild(span);
+  }
+  creditsEl.appendChild(frag);
+}
+
+async function fetchHolderLabelsForToken(fa2, tokenId) {
+  const params = new URLSearchParams({
+    "token.contract": fa2,
+    "token.tokenId": String(tokenId),
+    "balance.gt": "0",
+    limit: "10000"
+  });
+  const url = CONFIG.tzktApiBase + "/tokens/balances?" + params.toString();
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const rows = await response.json();
+    if (!Array.isArray(rows)) return [];
+    const out = [];
+    for (const row of rows) {
+      const address = row.account && row.account.address ? String(row.account.address) : "";
+      if (!address.startsWith("tz")) continue;
+      const alias = row.account && row.account.alias ? String(row.account.alias).trim() : "";
+      const label = alias || formatShortAddress(address);
+      out.push({ address, label });
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+async function refreshCollectorCredits(items) {
+  if (!CONFIG.collectorCreditsEnabled || !creditsEl) return;
+  creditsEl.innerHTML = "";
+  creditsEl.hidden = true;
+  if (!items || !items.length) return;
+
+  const maxTok = Number(CONFIG.collectorCreditsMaxTokens) || 80;
+  const concurrency = Math.max(1, Number(CONFIG.collectorCreditsConcurrency) || 6);
+  const excludeMinter = CONFIG.collectorCreditsExcludeMinter !== false;
+  const minter = String(CONFIG.minterWallet || "").trim().toLowerCase();
+
+  const slice = items.slice(0, maxTok);
+  const byAddress = new Map();
+
+  for (let i = 0; i < slice.length; i += concurrency) {
+    const batch = slice.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (item) => {
+        const fa2 = resolveFa2Address(item);
+        if (!fa2) return;
+        const holders = await fetchHolderLabelsForToken(fa2, item.tokenId);
+        for (const { address, label } of holders) {
+          const a = address.toLowerCase();
+          if (excludeMinter && minter && a === minter) continue;
+          if (!byAddress.has(a)) byAddress.set(a, label);
+        }
+      })
+    );
+  }
+
+  const uniqLabels = Array.from(byAddress.values());
+  if (!uniqLabels.length) return;
+  populateCollectorCreditsDom(uniqLabels);
+  creditsEl.hidden = false;
 }
 
 async function viewerOwnsToken(viewer, fa2Address, tokenId) {
@@ -345,9 +575,7 @@ function togglePlay(item, tileEl) {
         state.currentTokenId = null;
         state.currentAudio = null;
         const msg =
-          limitSec <= basePreview
-            ? "Preview ended — collect this OBJKT for full playback."
-            : "Playback limit reached — collect more editions to hear the rest.";
+          limitSec <= basePreview ? "" : "Playback limit reached — collect more editions to hear the rest.";
         setStatus(msg);
       };
       const fadeCfg = Number(CONFIG.previewFadeOutSeconds) || 0;
@@ -475,6 +703,7 @@ function renderGrid(items) {
     cover.alt = item.name;
     cover.loading = "lazy";
     coverWrap.appendChild(cover);
+    appendListingChip(coverWrap, item);
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -509,9 +738,6 @@ function renderGrid(items) {
 
   if (restItems.length) {
     catalogMoreEl.hidden = false;
-    const title = document.createElement("h2");
-    title.className = "catalog-more-title";
-    title.textContent = "More in catalog (ranks 4–" + items.length + " by sales)";
     const row = document.createElement("div");
     row.className = "catalog-more-row";
     const btnPrev = document.createElement("button");
@@ -551,6 +777,7 @@ function renderGrid(items) {
       cover.alt = item.name;
       cover.loading = "lazy";
       coverWrap.appendChild(cover);
+      appendListingChip(coverWrap, item);
 
       const meta = document.createElement("div");
       meta.className = "meta";
@@ -611,33 +838,21 @@ function renderGrid(items) {
     row.appendChild(btnPrev);
     row.appendChild(scroll);
     row.appendChild(btnNext);
-    catalogMoreEl.appendChild(title);
     catalogMoreEl.appendChild(row);
     requestAnimationFrame(updateCatalogNav);
     setTimeout(updateCatalogNav, 400);
   }
 
-  const fallbackNote = items.length < 3 ? " (showing all available)" : "";
-  const catalogNote =
-    items.length > topItems.length ? " Scroll below the mosaic for ranks 4+." : "";
   const viewer = String(CONFIG.viewerWallet || "").trim();
   let suffix = "";
   if (!viewer.startsWith("tz")) {
-    suffix = " 10s previews until CONFIG.viewerWallet is set (holders unlock full audio).";
+    suffix = "10s previews until CONFIG.viewerWallet is set (holders unlock full audio).";
   }
   const mockHint = CONFIG.useMockData
     ? "Mock mode — use viewerWallet + mockCollectedTokenIds to test unlock. "
     : "";
-  setStatus(
-    mockHint +
-      "Showing top " +
-      topItems.length +
-      " most-bought tagged tracks by sales count" +
-      fallbackNote +
-      "." +
-      catalogNote +
-      suffix
-  );
+  const tail = (mockHint + suffix).trim();
+  setStatus(tail);
 }
 
 async function loadAndRender(forceRefresh = false) {
@@ -649,13 +864,18 @@ async function loadAndRender(forceRefresh = false) {
       return String(b.mintedAt).localeCompare(String(a.mintedAt));
     });
     state.items = mockItems;
-    await enrichOwnershipForTopItems(state.items, forceRefresh);
+    await Promise.all([
+      enrichOwnershipForTopItems(state.items, forceRefresh),
+      attachCheapestListings(state.items)
+    ]);
     renderGrid(mockItems);
+    void refreshCollectorCredits(mockItems);
     return;
   }
 
   if (!CONFIG.minterWallet.startsWith("tz")) {
     setStatus("Please set CONFIG.minterWallet before minting this OBJKT.", true);
+    clearCollectorCreditsLayer();
     return;
   }
 
@@ -666,8 +886,12 @@ async function loadAndRender(forceRefresh = false) {
       const cached = loadCache();
       if (cached && cached.length) {
         state.items = cached;
-        await enrichOwnershipForTopItems(state.items, false);
+        await Promise.all([
+          enrichOwnershipForTopItems(state.items, false),
+          attachCheapestListings(state.items)
+        ]);
         renderGrid(state.items);
+        void refreshCollectorCredits(state.items);
         return;
       }
     }
@@ -676,16 +900,17 @@ async function loadAndRender(forceRefresh = false) {
     const items = await fetchFromTeztok();
     state.items = items;
     saveCache(items);
-    await enrichOwnershipForTopItems(state.items, forceRefresh);
+    await Promise.all([
+      enrichOwnershipForTopItems(state.items, forceRefresh),
+      attachCheapestListings(state.items)
+    ]);
     renderGrid(items);
+    void refreshCollectorCredits(items);
   } catch (error) {
     const message = error && error.message ? error.message : "Unknown error";
     setStatus("Could not load NFTs: " + message, true);
+    clearCollectorCreditsLayer();
   }
 }
-
-refreshBtn.addEventListener("click", () => {
-  loadAndRender(true);
-});
 
 loadAndRender(false);

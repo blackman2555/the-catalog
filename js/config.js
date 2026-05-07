@@ -24,7 +24,17 @@ const CONFIG = {
   useMockData: false,
   mockCollectedTokenIds: [],
   editionStacks: {},
-  mockEditionHoldings: {}
+  mockEditionHoldings: {},
+  // Background “film credits”: aggregate OBJKT holders via TzKT (homage to collectors).
+  collectorCreditsEnabled: true,
+  collectorCreditsMaxTokens: 80,
+  collectorCreditsConcurrency: 6,
+  collectorCreditsExcludeMinter: true,
+  collectorCreditsMinLines: 28,
+  collectorCreditsMaxLines: 72,
+  objktGraphqlEndpoint: "https://data.objkt.com/v3/graphql",
+  teiaObjktBase: "https://teia.art/objkt",
+  objktListingChunkSize: 90
 };
 
 /** Used only when useMockData is true — add static rows here for offline UI tests. */

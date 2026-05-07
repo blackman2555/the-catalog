@@ -11,6 +11,7 @@ Interactive OBJKT that:
 
 - `index.html`: markup only; loads CSS and scripts
 - `css/styles.css`: layout and collage styles
+- `js/social-links.js`: outbound **X / Instagram / Spotify / YouTube** URLs for the header (edit here only)
 - `js/config.js`: `CONFIG` and `MOCK_ITEMS` (edit before minting / for mock mode)
 - `js/app.js`: Teztok fetch, playback, DOM collage (no build step; classic scripts)
 
@@ -43,7 +44,7 @@ If you have no album covers minted yet:
 
 1. Set `CONFIG.useMockData = true`.
 2. Open `index.html` in browser.
-3. Test mosaic layout, click play/pause, keyboard controls, and refresh behavior.
+3. Test mosaic layout, click play/pause, and keyboard controls.
 4. Set `CONFIG.useMockData = false` when ready for live Teztok data.
 
 With `useMockData: true`, populate `MOCK_ITEMS` in `js/config.js` for offline-only tests (otherwise leave it empty and use live Teztok).
@@ -69,7 +70,6 @@ With `useMockData: true`, populate `MOCK_ITEMS` in `js/config.js` for offline-on
 - Click same cover again: pause
 - Click another cover: it becomes new center, previous track stops, and new one plays
 - Keyboard: focus tile and press Enter/Space
-- Refresh button: force re-fetch and re-rank latest mints
 - Responsive collage keeps overlap/rotation across desktop, tablet, and mobile
 - Center selection is sticky until another cover is selected
 
