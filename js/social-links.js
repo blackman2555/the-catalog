@@ -8,9 +8,9 @@
  */
 const SOCIAL_LINKS = {
   x: "http://x.com/shelton",
-  instagram: "http://x.com/sheltonc",
-  spotify: "http://x.com/sheltonc",
-  youtube: "http://x.com/sheltonc"
+  instagram: "https://www.instagram.com/itssheltonbaby/",
+  spotify: "https://open.spotify.com/artist/2CuE3XIQ1OsbLNElhF7Yg1?si=IKeCTzHNRm-vjY3A9ExpBg&nd=1&dlsi=c6fd8d9fe49543e2",
+  youtube: "https://www.youtube.com/@SheltonC"
 };
 
 function normalizeSocialUrl(raw) {
